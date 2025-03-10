@@ -9,6 +9,7 @@ typedef unsigned short WORD;
 typedef unsigned int DWORD;
 typedef unsigned int LONG;
 
+#pragma pack(push, 1)
 struct bfh {
     WORD bfType; //specifies the file type
     DWORD bfSize; //specifies the size in bytes of the bitmap file
@@ -34,30 +35,20 @@ struct bih {
 struct compressed_image_header {
     LONG width;
     LONG height;
-    DWORD quality;
-    DWORD freq_table_size;
+    LONG quality;
+    LONG red_tree_size;
+    LONG green_tree_size;
+    LONG blue_tree_size;
+    LONG red_bitdata_size;
+    LONG green_bitdata_size;
+    LONG blue_bitdata_size;
 };
-
-struct htn {
-    int value;
-    htn *left;
-    htn *right;
-
-    htn(int v, htn *l, htn *r) {
-        value = v;
-        left = l;
-        right = r;
-    }
-};
-
-struct color_freq {
-    int color;
-    int freq;
-};
+#pragma pack(pop)
 
 struct bitpattern {
     std::vector<BYTE> pattern;
     int digit = 0;
+    int colorvalue;
     void writebit(BYTE bit){
         pattern.push_back(bit);
         digit++;
@@ -65,16 +56,106 @@ struct bitpattern {
     void reset(){
         digit = 0;
     }
+    void remove_last(){
+        digit--;
+    }
+};
+
+struct htn {
+    int value, freq;
+    htn *left = nullptr;
+    htn *right = nullptr;
+    int index;
+    int il = -1;
+    int ir = -1;
+
+    htn(){
+        value = 0;
+        left = NULL;
+        right = NULL;
+        il = -1;
+        ir = -1;
+    }
+
+    htn(int v, int f, htn *l, htn *r) {
+        value = v;
+        freq = f;
+        left = l;
+        right = r;
+    }
+
+    void get_bit_pattern(std::vector<bitpattern> &bp, bitpattern *current = NULL){
+        if (current == NULL){
+            current = new bitpattern();
+        }
+        if (left == NULL && right == NULL){
+            current->colorvalue = value;
+            bp.push_back(*current);
+        }
+        if (left){
+            current->writebit(0);
+            left->get_bit_pattern(bp, current);
+            current->remove_last();
+        }
+        if (right){
+            current->writebit(1);
+            right->get_bit_pattern(bp, current);
+            current->remove_last();
+        }
+    }
+
+    void assign_indices(int &i){
+        index = i;
+        i++;
+        if (left){
+            left->assign_indices(i);
+            il = left->index;
+        }
+        if (right){
+            right->assign_indices(i);
+            ir = right->index;
+        }
+    }
+
+    int count_children(htn *node){
+        if (node == NULL){
+            return 0;
+        }
+        return 1 + count_children(node->left) + count_children(node->right);
+    }
+
+    void write_to_array(std::vector<htn> &arr, htn *node){
+        if (node == NULL){
+            return;
+        }
+        arr[node->index] = *node;
+        if (node->left){
+            arr[node->left->index] = *node->left;
+            write_to_array(arr, node->left);
+        }
+        if (node->right){
+            arr[node->right->index] = *node->right;
+            write_to_array(arr, node->right);
+        }
+    }
+        
+};
+
+struct color_freq {
+    int color;
+    int freq;
 };
 
 struct bitarray {
-    std::vector<BYTE> bitdata;
+    BYTE *bitdata = NULL;
     int bitp = 0;
     void putbit(BYTE bit){
         int i = bitp / 8;
+        int actual_bitp = bitp - i * 8;
 
-        int shift_amount = 7 - (bitp % 8);
-        bitdata[i] = bitdata[i] | (bit << shift_amount);
+        int shift_amount = 7 - (actual_bitp);
+        bit <<= shift_amount;
+        bitdata[i] |= bit;
         bitp++;
     }
 
@@ -84,21 +165,25 @@ struct bitarray {
         }
     }
 
-    bitarray(int size): bitdata(size, 0){}
+    bitarray(int size){
+        bitdata = new BYTE[size]();
+    }
 };
 
 // compare function for qsort of color_freq
-int compare(const void *a, const void *b) {
-    color_freq *c1 = (color_freq *)a;
-    color_freq *c2 = (color_freq *)b;
-    return (c1 -> freq) - (c2 -> freq);
-};
+bool compare_color_freq(color_freq a, color_freq b){
+    return a.freq < b.freq;
+}
+
+bool compare_htn(htn a, htn b){
+    return a.freq > b.freq;
+}
 
 int main(){ // program name, img path, quality (1-10)
 
     // reading input bitmap
-    FILE *file = fopen("blend images/Mario.bmp", "rb");
-    int quality = 5; // TODO: make sure this uses cli args
+    FILE *file = fopen("blend images/jar.bmp", "rb"); //TODO: make sure this uses cli args
+    int quality = 10; // TODO: make sure this uses cli args
     bfh fileHeader;
     bih infoHeader;
     fread(&fileHeader, sizeof(bfh), 1, file);
@@ -107,149 +192,146 @@ int main(){ // program name, img path, quality (1-10)
     fread(img_data, infoHeader.biSizeImage, 1, file);
     fclose(file);
 
-    // compression factor and division of pixel values
-    for (int i = 0; i < infoHeader.biSizeImage; i++) {
-        img_data[i] = (img_data[i] * quality) / 10; // quality = 10 means lossless, quality = 1 means 1/10 of original
+    // pixel sizes and padding calculations
+    int pixel_width = infoHeader.biWidth * 3;
+    int padding;
+    if (pixel_width % 4 == 0){
+        padding = 0;
+    } else {
+        padding = 4 - (pixel_width % 4);
     }
 
+    pixel_width += padding;
+
     // creating individual color arrays
-    BYTE *red_data = (BYTE *)malloc(infoHeader.biSizeImage / 3);
-    BYTE *green_data = (BYTE *)malloc(infoHeader.biSizeImage / 3);
-    BYTE *blue_data = (BYTE *)malloc(infoHeader.biSizeImage / 3);
-    for (int i = 0; i < infoHeader.biSizeImage; i += 3) {
-        red_data[i / 3] = img_data[i];
-        green_data[i / 3] = img_data[i + 1];
-        blue_data[i / 3] = img_data[i + 2];
+    BYTE *red_data = (BYTE *)malloc(infoHeader.biSizeImage);
+    BYTE *green_data = (BYTE *)malloc(infoHeader.biSizeImage);
+    BYTE *blue_data = (BYTE *)malloc(infoHeader.biSizeImage);
+    for (int row = 0; row < infoHeader.biHeight; row++){
+        for (int col = 0; col < infoHeader.biWidth; col++){
+            int index = row * pixel_width + col * 3;
+            red_data[row * infoHeader.biWidth + col] = img_data[index + 2];
+            green_data[row * infoHeader.biWidth + col] = img_data[index + 1];
+            blue_data[row * infoHeader.biWidth + col] = img_data[index];
+        }
+    }
+
+    // quality scaling
+    for (int i = 0; i < infoHeader.biSizeImage; i++) {
+        red_data[i] = (red_data[i] * quality) / 10;
+        green_data[i] = (green_data[i] * quality) / 10;
+        blue_data[i] = (blue_data[i] * quality) / 10;
     }
 
     // frequency tables of each color
-    color_freq *red_freq = (color_freq *)malloc(256 * sizeof(color_freq));
-    color_freq *green_freq = (color_freq *)malloc(256 * sizeof(color_freq));
-    color_freq *blue_freq = (color_freq *)malloc(256 * sizeof(color_freq));
+    std::vector<color_freq> red_freq(256);
+    std::vector<color_freq> green_freq(256);
+    std::vector<color_freq> blue_freq(256);
     for (int i = 0; i < 256; i++) {
         red_freq[i].color = i;
         red_freq[i].freq = 0;
+
         green_freq[i].color = i;
         green_freq[i].freq = 0;
+
         blue_freq[i].color = i;
         blue_freq[i].freq = 0;
     }
-    for (int i = 0; i < infoHeader.biSizeImage / 3; i++) {
+    for (int i = 0; i < infoHeader.biHeight * infoHeader.biWidth; i++) {
         red_freq[red_data[i]].freq++;
         green_freq[green_data[i]].freq++;
         blue_freq[blue_data[i]].freq++;
     }
 
     // sorting each frequency table with qsort (least frequency first)
-    qsort(red_freq, 256, sizeof(color_freq), compare);
-    qsort(green_freq, 256, sizeof(color_freq), compare);
-    qsort(blue_freq, 256, sizeof(color_freq), compare);
+    std::sort(red_freq.begin(), red_freq.end(), compare_color_freq);
+    std::sort(green_freq.begin(), green_freq.end(), compare_color_freq);
+    std::sort(blue_freq.begin(), blue_freq.end(), compare_color_freq);
 
-    // declaring vectors for each color
+    // declaring vectors for each color, these will be used to construct the trees
     std::vector<htn> red_list;
     std::vector<htn> green_list;
     std::vector<htn> blue_list;
 
-    // creating huffman trees for each color
+    // creating red huff tree, skipping colors that don't appear
     for (int i = 0; i < 256; i++) {
-        red_list.push_back(htn(red_freq[i].freq, NULL, NULL));
-        green_list.push_back(htn(green_freq[i].freq, NULL, NULL));
-        blue_list.push_back(htn(blue_freq[i].freq, NULL, NULL));
+        if (red_freq[i].freq == 0) {
+            continue;
+        }
+        red_list.emplace_back(htn(red_freq[i].color, red_freq[i].freq, NULL, NULL));
     }
     while (red_list.size() > 1) {
-        htn *left = (htn *)malloc(sizeof(htn));
-        htn *right = (htn *)malloc(sizeof(htn));
-        *left = red_list[0];
-        *right = red_list[1];
-        red_list.erase(red_list.begin());
-        red_list.erase(red_list.begin());
-        red_list.push_back(htn(left -> value + right -> value, left, right));
-        qsort(red_list.data(), red_list.size(), sizeof(htn), compare);
+        std::sort(red_list.begin(), red_list.end(), compare_htn);
+        htn *left = new htn(red_list[0]);
+        htn *right = new htn(red_list[1]);
+        red_list.erase(red_list.begin(), red_list.begin() + 2);
+        red_list.emplace_back(htn(-1, left->freq + right->freq, left, right));
+    }
+
+    // creating green huff tree, skipping colors that don't appear
+    for (int i = 0; i < 256; i++) {
+        if (green_freq[i].freq == 0) {
+            continue;
+        }
+        green_list.emplace_back(htn(green_freq[i].color, green_freq[i].freq, NULL, NULL));
     }
     while (green_list.size() > 1) {
-        htn *left = (htn *)malloc(sizeof(htn));
-        htn *right = (htn *)malloc(sizeof(htn));
-        *left = green_list[0];
-        *right = green_list[1];
-        green_list.erase(green_list.begin());
-        green_list.erase(green_list.begin());
-        green_list.push_back(htn(left -> value + right -> value, left, right));
-        qsort(green_list.data(), green_list.size(), sizeof(htn), compare);
+        std::sort(green_list.begin(), green_list.end(), compare_htn);
+        htn *left = new htn(green_list[0]);
+        htn *right = new htn(green_list[1]);
+        green_list.erase(green_list.begin(), green_list.begin() + 2);
+        green_list.emplace_back(htn(-1, left->freq + right->freq, left, right));
+
+    }
+
+    // creating blue huff tree, skipping colors that don't appear
+    for (int i = 0; i < 256; i++) {
+        if (blue_freq[i].freq == 0) {
+            continue;
+        }
+        blue_list.emplace_back(htn(blue_freq[i].color, blue_freq[i].freq, NULL, NULL));
     }
     while (blue_list.size() > 1) {
-        htn *left = (htn *)malloc(sizeof(htn));
-        htn *right = (htn *)malloc(sizeof(htn));
-        *left = blue_list[0];
-        *right = blue_list[1];
-        blue_list.erase(blue_list.begin());
-        blue_list.erase(blue_list.begin());
-        blue_list.push_back(htn(left -> value + right -> value, left, right));
-        qsort(blue_list.data(), blue_list.size(), sizeof(htn), compare);
+        std::sort(blue_list.begin(), blue_list.end(), compare_htn);
+        htn *left = new htn(blue_list[0]);
+        htn *right = new htn(blue_list[1]);
+        blue_list.erase(blue_list.begin(), blue_list.begin() + 2);
+        blue_list.emplace_back(htn(-1, left->freq + right->freq, left, right));
+
     }
 
+    // writing red huffman codes to a vector of bitpatterns
+    std::vector<bitpattern> red_patterns;
+    red_list[0].get_bit_pattern(red_patterns);
 
-    // printing huffman tree roots
-    printf("Red Huffman Tree Root: %d\n", red_list[0].value);
-    printf("Green Huffman Tree Root: %d\n", green_list[0].value);
-    printf("Blue Huffman Tree Root: %d\n", blue_list[0].value);
+    // writing green huffman codes to a vector of bitpatterns
+    std::vector<bitpattern> green_patterns;
+    green_list[0].get_bit_pattern(green_patterns);
 
-    // writing red huffman codes to a bitpattern
+    // writing blue huffman codes to a vector of bitpatterns
+    std::vector<bitpattern> blue_patterns;
+    blue_list[0].get_bit_pattern(blue_patterns);
+
+    // combining bitpatterns from vectors into a single bitpattern
     bitpattern red_pattern;
-    std::queue<htn> red_queue;
-    red_queue.push(red_list[0]);
-    while (!red_queue.empty()) {
-        htn current = red_queue.front();
-        red_queue.pop();
-        if (current.left == NULL && current.right == NULL) {
-            red_pattern.writebit(1);
-            for (int i = 0; i < 8; i++) {
-                red_pattern.writebit((current.value >> i) & 1);
-            }
-        } else {
-            red_pattern.writebit(0);
-            red_queue.push(*(current.left));
-            red_queue.push(*(current.right));
-        }
-    }
-
-    // writing green huffman codes to a bitpattern
     bitpattern green_pattern;
-    std::queue<htn> green_queue;
-    green_queue.push(green_list[0]);
-    while (!green_queue.empty()) {
-        htn current = green_queue.front();
-        green_queue.pop();
-        if (current.left == NULL && current.right == NULL) {
-            green_pattern.writebit(1);
-            for (int i = 0; i < 8; i++) {
-                green_pattern.writebit((current.value >> i) & 1);
-            }
-        } else {
-            green_pattern.writebit(0);
-            green_queue.push(*(current.left));
-            green_queue.push(*(current.right));
-        }
-    }
-
-    // writing blue huffman codes to a bitpattern
     bitpattern blue_pattern;
-    std::queue<htn> blue_queue;
-    blue_queue.push(blue_list[0]);
-    while (!blue_queue.empty()) {
-        htn current = blue_queue.front();
-        blue_queue.pop();
-        if (current.left == NULL && current.right == NULL) {
-            blue_pattern.writebit(1);
-            for (int i = 0; i < 8; i++) {
-                blue_pattern.writebit((current.value >> i) & 1);
-            }
-        } else {
-            blue_pattern.writebit(0);
-            blue_queue.push(*(current.left));
-            blue_queue.push(*(current.right));
+    for (int i = 0; i < red_patterns.size(); i++){
+        for (int u = 0; u < red_patterns[i].pattern.size(); u++){
+            red_pattern.writebit(red_patterns[i].pattern[u]);
         }
     }
-
+    for (int i = 0; i < green_patterns.size(); i++){
+        for (int u = 0; u < green_patterns[i].pattern.size(); u++){
+            green_pattern.writebit(green_patterns[i].pattern[u]);
+        }
+    }
+    for (int i = 0; i < blue_patterns.size(); i++){
+        for (int u = 0; u < blue_patterns[i].pattern.size(); u++){
+            blue_pattern.writebit(blue_patterns[i].pattern[u]);
+        }
+    }
+    
     // writing red bitpattern to bitarray
     bitarray red_bitarray(red_pattern.pattern.size());
     red_bitarray.putbitpattern(red_pattern);
@@ -262,24 +344,78 @@ int main(){ // program name, img path, quality (1-10)
     bitarray blue_bitarray(blue_pattern.pattern.size());
     blue_bitarray.putbitpattern(blue_pattern);
 
-    // writing header and patterns to a new file
-    FILE *compressed_file = fopen("compressed_image.xxx", "wb");
+    // assigning indices for each tree
+    int i = 0;
+    red_list[0].assign_indices(i);
+    i = 0;
+    green_list[0].assign_indices(i);
+    i = 0;
+    blue_list[0].assign_indices(i);
+
+    // getting tree node counts
+    int red_node_count = red_list[0].count_children(&red_list[0]);
+    int green_node_count = green_list[0].count_children(&green_list[0]);
+    int blue_node_count = blue_list[0].count_children(&blue_list[0]);
+
+    // creating arrays for huff trees
+    std::vector<htn> red_arr(red_node_count);
+    std::vector<htn> green_arr(green_node_count);
+    std::vector<htn> blue_arr(blue_node_count);
+
+    // copying huff trees to arrays using left and right indices
+    red_list[0].write_to_array(red_arr, &red_list[0]);
+    green_list[0].write_to_array(green_arr, &green_list[0]);
+    blue_list[0].write_to_array(blue_arr, &blue_list[0]);
+    
+    // creating compressed file
+    FILE *compressed_file = fopen("compressed_image.xxx", "wb"); // TODO: make sure this uses cli args
 
     // setting up header
     compressed_image_header header;
     header.width = infoHeader.biWidth;
     header.height = infoHeader.biHeight;
     header.quality = quality;
-    header.freq_table_size = 256;
+    header.red_tree_size = red_node_count;
+    header.green_tree_size = green_node_count;
+    header.blue_tree_size = blue_node_count;
+    header.red_bitdata_size = red_pattern.pattern.size();
+    header.green_bitdata_size = green_pattern.pattern.size();
+    header.blue_bitdata_size = blue_pattern.pattern.size();
 
-    // writing header and patterns to file
+    // writing header, huff arrays, and bitarrays to file
     fwrite(&header, sizeof(compressed_image_header), 1, compressed_file);
-    fwrite(red_freq, sizeof(color_freq), 256, compressed_file);
-    fwrite(green_freq, sizeof(color_freq), 256, compressed_file);
-    fwrite(blue_freq, sizeof(color_freq), 256, compressed_file);
-    fwrite(red_bitarray.bitdata.data(), sizeof(BYTE), red_bitarray.bitdata.size(), compressed_file);
-    fwrite(green_bitarray.bitdata.data(), sizeof(BYTE), green_bitarray.bitdata.size(), compressed_file);
-    fwrite(blue_bitarray.bitdata.data(), sizeof(BYTE), blue_bitarray.bitdata.size(), compressed_file);
+    for (int i = 0; i < red_node_count; i++){
+        fwrite(&red_arr[i].value, sizeof(int), 1, compressed_file);
+        fwrite(&red_arr[i].freq, sizeof(int), 1, compressed_file);
+        fwrite(&red_arr[i].il, sizeof(int), 1, compressed_file);
+        fwrite(&red_arr[i].ir, sizeof(int), 1, compressed_file);
+    }
+    for (int i = 0; i < green_node_count; i++){
+        fwrite(&green_arr[i].value, sizeof(int), 1, compressed_file);
+        fwrite(&green_arr[i].freq, sizeof(int), 1, compressed_file);
+        fwrite(&green_arr[i].il, sizeof(int), 1, compressed_file);
+        fwrite(&green_arr[i].ir, sizeof(int), 1, compressed_file);
+    }
+    for (int i = 0; i < blue_node_count; i++){
+        fwrite(&blue_arr[i].value, sizeof(int), 1, compressed_file);
+        fwrite(&blue_arr[i].freq, sizeof(int), 1, compressed_file);
+        fwrite(&blue_arr[i].il, sizeof(int), 1, compressed_file);
+        fwrite(&blue_arr[i].ir, sizeof(int), 1, compressed_file);
+    }
+    fwrite(red_bitarray.bitdata, 1, (red_pattern.pattern.size()/8) + 1, compressed_file);
+    fwrite(green_bitarray.bitdata, 1, (green_pattern.pattern.size()/8) + 1, compressed_file);
+    fwrite(blue_bitarray.bitdata, 1, (blue_pattern.pattern.size()/8) + 1, compressed_file);
+
+    // writing original headers to reconstruct image
+    fwrite(&fileHeader, sizeof(bfh), 1, compressed_file);
+    fwrite(&infoHeader, sizeof(bih), 1, compressed_file);
+
+    // cleanup
+    fclose(compressed_file);
+    free(img_data);
+    free(red_data);
+    free(green_data);
+    free(blue_data);
 
     return 0;
 }
