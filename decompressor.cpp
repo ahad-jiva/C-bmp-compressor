@@ -87,7 +87,7 @@ struct bitarray {
 };
 
 int main(int argc, char *argv[]){ // program name, compressed file, output file
-    FILE *compressed_file = fopen("compressed_image.xxx", "rb");
+    FILE *compressed_file = fopen(argv[1], "rb");
 
     // read header
     compressed_image_header header;
@@ -244,8 +244,7 @@ int main(int argc, char *argv[]){ // program name, compressed file, output file
     }
 
     pixel_width += padding;
-    int quality_factor = 2 * (11 - header.quality);
-
+    int quality_factor = header.quality * 10;
     // restoring quality scaling
     for (int i = 0; i < header.width * header.height; i++){
         red_vals[i] *= quality_factor;

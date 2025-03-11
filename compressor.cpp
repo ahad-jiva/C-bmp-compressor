@@ -93,23 +93,18 @@ struct htn {
         while (!s.empty()) {
             auto [node, current] = s.top();
             s.pop();
-    
-            // Check if we're at a leaf node (no children)
             if (node->left == NULL && node->right == NULL) {
-                current.colorvalue = node->value; // Set the color value
-                bp.push_back(current); // Store the bit pattern for this leaf
+                current.colorvalue = node->value;
+                bp.push_back(current);
             } else {
-                // If there is a right child, push it to the stack with bit '1'
                 if (node->right) {
                     bitpattern right_copy = current;
-                    right_copy.writebit(1); // Append '1' for right child
+                    right_copy.writebit(1);
                     s.push(std::make_pair(node->right, right_copy));
                 }
-    
-                // If there is a left child, push it to the stack with bit '0'
                 if (node->left) {
                     bitpattern left_copy = current;
-                    left_copy.writebit(0); // Append '0' for left child
+                    left_copy.writebit(0);
                     s.push(std::make_pair(node->left, left_copy));
                 }
             }
@@ -180,7 +175,6 @@ struct bitarray {
     }
 };
 
-// compare function for qsort of color_freq
 bool compare_color_freq(color_freq a, color_freq b){
     return a.freq < b.freq;
 }
@@ -226,12 +220,11 @@ int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
         }
     }
 
-    // TODO: quality scaling
-    int quality_factor = 2 * (11 - quality);
+    int quality_factor = quality * 10;
     for (int i = 0; i < infoHeader.biSizeImage; i++) {
-        red_data[i] /= quality_factor;
-        green_data[i] /= quality_factor;
-        blue_data[i] /= quality_factor;
+        red_data[i] = (red_data[i] / quality_factor);
+        green_data[i] = (green_data[i] / quality_factor);
+        blue_data[i] = (blue_data[i] / quality_factor);
     }
 
     // frequency tables of each color
