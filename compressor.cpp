@@ -87,7 +87,7 @@ struct htn {
     }
 
     void get_bit_pattern(std::vector<bitpattern> &bp) {
-        std::stack<std::pair<htn*, bitpattern>> s;
+        std::stack<std::pair<htn*, bitpattern> > s;
         s.push(std::make_pair(this, bitpattern()));
     
         while (!s.empty()) {
@@ -192,8 +192,8 @@ bool compare_htn(htn a, htn b){
 int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
 
     // reading input bitmap
-    FILE *file = fopen("blend images/flowers.bmp", "rb");
-    int quality = 10;
+    FILE *file = fopen(argv[1], "rb");
+    int quality = atoi(argv[2]);
     bfh fileHeader;
     bih infoHeader;
     fread(&fileHeader, sizeof(bfh), 1, file);
@@ -227,10 +227,11 @@ int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
     }
 
     // TODO: quality scaling
+    int quality_factor = 2 * (11 - quality);
     for (int i = 0; i < infoHeader.biSizeImage; i++) {
-        red_data[i] = (red_data[i] * quality) / 10;
-        green_data[i] = (green_data[i] * quality) / 10;
-        blue_data[i] = (blue_data[i] * quality) / 10;
+        red_data[i] /= quality_factor;
+        green_data[i] /= quality_factor;
+        blue_data[i] /= quality_factor;
     }
 
     // frequency tables of each color
@@ -351,15 +352,15 @@ int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
     }
     
     // writing red bitpattern to bitarray
-    bitarray red_bitarray(red_pattern.pattern.size());
+    bitarray red_bitarray((red_pattern.pattern.size() + 7) / 8);
     red_bitarray.putbitpattern(red_pattern);
 
     // writing green bitpattern to bitarray
-    bitarray green_bitarray(green_pattern.pattern.size());
+    bitarray green_bitarray((green_pattern.pattern.size() + 7) / 8);
     green_bitarray.putbitpattern(green_pattern);
 
     // writing blue bitpattern to bitarray
-    bitarray blue_bitarray(blue_pattern.pattern.size());
+    bitarray blue_bitarray((blue_pattern.pattern.size() + 7) / 8);
     blue_bitarray.putbitpattern(blue_pattern);
 
     // assigning indices for each tree
@@ -386,7 +387,7 @@ int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
     blue_list[0].write_to_array(blue_arr, &blue_list[0]);
     
     // creating compressed file
-    FILE *compressed_file = fopen("compressed_image.xxx", "wb"); // TODO: make sure this uses cli args
+    FILE *compressed_file = fopen("compressed_image.xxx", "wb");
 
     // setting up header
     compressed_image_header header;
@@ -420,9 +421,9 @@ int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
         fwrite(&blue_arr[i].il, sizeof(int), 1, compressed_file);
         fwrite(&blue_arr[i].ir, sizeof(int), 1, compressed_file);
     }
-    fwrite(red_bitarray.bitdata, 1, (red_bitarray.bitp+7)/8, compressed_file);
-    fwrite(green_bitarray.bitdata, 1, (green_bitarray.bitp+7)/8, compressed_file);
-    fwrite(blue_bitarray.bitdata, 1, (blue_bitarray.bitp+7)/8, compressed_file);
+    fwrite(red_bitarray.bitdata, 1, (red_pattern.digit+7)/8, compressed_file);
+    fwrite(green_bitarray.bitdata, 1, (green_pattern.digit+7)/8, compressed_file);
+    fwrite(blue_bitarray.bitdata, 1, (blue_pattern.digit+7)/8, compressed_file);
 
     // writing original headers to reconstruct image
     fwrite(&fileHeader, sizeof(bfh), 1, compressed_file);

@@ -86,7 +86,7 @@ struct bitarray {
     }
 };
 
-int main(){
+int main(int argc, char *argv[]){ // program name, compressed file, output file
     FILE *compressed_file = fopen("compressed_image.xxx", "rb");
 
     // read header
@@ -230,11 +230,11 @@ int main(){
     }
 
     // writing decompressed image headers
-    FILE *decompressed_file = fopen("decompressed_image.bmp", "wb");
+    FILE *decompressed_file = fopen(argv[2], "wb");
     fwrite(&fileHeader, sizeof(bfh), 1, decompressed_file);
     fwrite(&infoHeader, sizeof(bih), 1, decompressed_file);
     
-    // padding and pixel dimensions
+    // padding, pixel dimensions, and quality
     int pixel_width = header.width * 3;
     int padding;
     if (pixel_width % 4 == 0){
@@ -244,6 +244,14 @@ int main(){
     }
 
     pixel_width += padding;
+    int quality_factor = 2 * (11 - header.quality);
+
+    // restoring quality scaling
+    for (int i = 0; i < header.width * header.height; i++){
+        red_vals[i] *= quality_factor;
+        green_vals[i] *= quality_factor;
+        blue_vals[i] *= quality_factor;
+    }
 
     // writing decompressed image data with padding
     for (int row = 0; row < header.height; row++){
