@@ -71,26 +71,18 @@ struct htn {
 struct bitarray {
     BYTE *bitdata = NULL;
     int bitp = 0;
+
     bitarray(int size){
         bitdata = new BYTE[size];
     }
 
     BYTE getbit(){
         int i = bitp / 8;
-        int actual_bitp = bitp - i * 8;
+        int actual_bitp = bitp % 8;
 
-        BYTE bit = 1;
-        int shift_amount = 7 - (actual_bitp);
-        bit <<= shift_amount;
-
-        BYTE targetbit = bitdata[i] & bit;
+        BYTE targetbit = (bitdata[i] >> (7 - actual_bitp)) & 1;
         bitp++;
-        if (targetbit == 0){
-            return 0;
-        }
-        else {
-            return 1;
-        }
+        return targetbit;
     }
 };
 
@@ -132,9 +124,9 @@ int main(){
     bitarray green_bitarray(header.green_bitdata_size);
     bitarray blue_bitarray(header.blue_bitdata_size);
 
-    fread(red_bitarray.bitdata, sizeof(BYTE), (header.red_bitdata_size/8)+1, compressed_file);
-    fread(green_bitarray.bitdata, sizeof(BYTE), (header.green_bitdata_size/8)+1, compressed_file);
-    fread(blue_bitarray.bitdata, sizeof(BYTE), (header.blue_bitdata_size/8)+1, compressed_file);
+    fread(red_bitarray.bitdata, sizeof(BYTE), (header.red_bitdata_size+7)/8, compressed_file);
+    fread(green_bitarray.bitdata, sizeof(BYTE), (header.green_bitdata_size+7)/8, compressed_file);
+    fread(blue_bitarray.bitdata, sizeof(BYTE), (header.blue_bitdata_size+7)/8, compressed_file);
 
     // reading original headers
     fread(&fileHeader, sizeof(bfh), 1, compressed_file);
@@ -179,14 +171,14 @@ int main(){
     htn *blue_root = &blue_arr[0];
 
     // creating arrays for each color for the image
-    std::vector<BYTE> red_vals(infoHeader.biSizeImage);
-    std::vector<BYTE> green_vals(infoHeader.biSizeImage);
-    std::vector<BYTE> blue_vals(infoHeader.biSizeImage);
+    std::vector<BYTE> red_vals;
+    std::vector<BYTE> green_vals;
+    std::vector<BYTE> blue_vals;
 
     // traversing red huff tree with bitarray getbit()
     htn *current = red_root;
     int byte_index = 0;
-    while (red_bitarray.bitp < header.red_bitdata_size){
+    while (byte_index < header.width * header.height){
         BYTE bit = red_bitarray.getbit();
         if (bit == 0){
             current = current->left;
@@ -195,7 +187,7 @@ int main(){
             current = current->right;
         }
         if (current->left == NULL && current->right == NULL){
-            red_vals[byte_index] = current->value * header.quality;
+            red_vals.push_back(current->value);
             byte_index++;
             current = red_root;
         }
@@ -204,7 +196,7 @@ int main(){
     // traversing green huff tree with bitarray getbit()
     current = green_root;
     byte_index = 0;
-    while (green_bitarray.bitp < header.green_bitdata_size){
+    while (byte_index < header.width * header.height){
         BYTE bit = green_bitarray.getbit();
         if (bit == 0){
             current = current->left;
@@ -213,7 +205,7 @@ int main(){
             current = current->right;
         }
         if (current->left == NULL && current->right == NULL){
-            green_vals[byte_index] = current->value * header.quality;
+            green_vals.push_back(current->value);
             byte_index++;
             current = green_root;
         }
@@ -222,7 +214,7 @@ int main(){
     // traversing blue huff tree with bitarray getbit()
     current = blue_root;
     byte_index = 0;
-    while (blue_bitarray.bitp < header.blue_bitdata_size){
+    while (byte_index < header.width * header.height){
         BYTE bit = blue_bitarray.getbit();
         if (bit == 0){
             current = current->left;
@@ -231,7 +223,7 @@ int main(){
             current = current->right;
         }
         if (current->left == NULL && current->right == NULL){
-            blue_vals[byte_index] = current->value * header.quality;
+            blue_vals.push_back(current->value);
             byte_index++;
             current = blue_root;
         }
@@ -253,15 +245,21 @@ int main(){
 
     pixel_width += padding;
 
-    // writing decompressed image data
+    // writing decompressed image data with padding
     for (int row = 0; row < header.height; row++){
-        for (int col = 0; col < pixel_width; col++){
-            int index = row * pixel_width + col * 3;
-            fwrite(&blue_vals[index], sizeof(BYTE), 1, decompressed_file);
-            fwrite(&green_vals[index], sizeof(BYTE), 1, decompressed_file);
-            fwrite(&red_vals[index], sizeof(BYTE), 1, decompressed_file);
+        for (int col = 0; col < header.width; col++){
+            BYTE red = red_vals[row * header.width + col];
+            BYTE green = green_vals[row * header.width + col];
+            BYTE blue = blue_vals[row * header.width + col];
+            fwrite(&blue, sizeof(BYTE), 1, decompressed_file);
+            fwrite(&green, sizeof(BYTE), 1, decompressed_file);
+            fwrite(&red, sizeof(BYTE), 1, decompressed_file);
         }
 
+        for (int i = 0; i < padding; i++){
+            BYTE pad = 0;
+            fwrite(&pad, sizeof(BYTE), 1, decompressed_file);
+        }
     }
 
     fclose(decompressed_file);

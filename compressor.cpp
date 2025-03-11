@@ -3,6 +3,8 @@
 #include <sys/mman.h>
 #include <queue>
 #include <vector>
+#include <stack>
+#include <algorithm>
 
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -84,23 +86,33 @@ struct htn {
         right = r;
     }
 
-    void get_bit_pattern(std::vector<bitpattern> &bp, bitpattern *current = NULL){
-        if (current == NULL){
-            current = new bitpattern();
-        }
-        if (left == NULL && right == NULL){
-            current->colorvalue = value;
-            bp.push_back(*current);
-        }
-        if (left){
-            current->writebit(0);
-            left->get_bit_pattern(bp, current);
-            current->remove_last();
-        }
-        if (right){
-            current->writebit(1);
-            right->get_bit_pattern(bp, current);
-            current->remove_last();
+    void get_bit_pattern(std::vector<bitpattern> &bp) {
+        std::stack<std::pair<htn*, bitpattern>> s;
+        s.push(std::make_pair(this, bitpattern()));
+    
+        while (!s.empty()) {
+            auto [node, current] = s.top();
+            s.pop();
+    
+            // Check if we're at a leaf node (no children)
+            if (node->left == NULL && node->right == NULL) {
+                current.colorvalue = node->value; // Set the color value
+                bp.push_back(current); // Store the bit pattern for this leaf
+            } else {
+                // If there is a right child, push it to the stack with bit '1'
+                if (node->right) {
+                    bitpattern right_copy = current;
+                    right_copy.writebit(1); // Append '1' for right child
+                    s.push(std::make_pair(node->right, right_copy));
+                }
+    
+                // If there is a left child, push it to the stack with bit '0'
+                if (node->left) {
+                    bitpattern left_copy = current;
+                    left_copy.writebit(0); // Append '0' for left child
+                    s.push(std::make_pair(node->left, left_copy));
+                }
+            }
         }
     }
 
@@ -151,11 +163,9 @@ struct bitarray {
     int bitp = 0;
     void putbit(BYTE bit){
         int i = bitp / 8;
-        int actual_bitp = bitp - i * 8;
 
-        int shift_amount = 7 - (actual_bitp);
-        bit <<= shift_amount;
-        bitdata[i] |= bit;
+        int shift_amount = 7 - (bitp % 8);
+        bitdata[i] |= (bit << shift_amount);
         bitp++;
     }
 
@@ -179,11 +189,11 @@ bool compare_htn(htn a, htn b){
     return a.freq > b.freq;
 }
 
-int main(){ // program name, img path, quality (1-10)
+int main(int argc, char *argv[]){ // program name, img path, quality (1-10)
 
     // reading input bitmap
-    FILE *file = fopen("blend images/jar.bmp", "rb"); //TODO: make sure this uses cli args
-    int quality = 10; // TODO: make sure this uses cli args
+    FILE *file = fopen("blend images/flowers.bmp", "rb");
+    int quality = 10;
     bfh fileHeader;
     bih infoHeader;
     fread(&fileHeader, sizeof(bfh), 1, file);
@@ -216,7 +226,7 @@ int main(){ // program name, img path, quality (1-10)
         }
     }
 
-    // quality scaling
+    // TODO: quality scaling
     for (int i = 0; i < infoHeader.biSizeImage; i++) {
         red_data[i] = (red_data[i] * quality) / 10;
         green_data[i] = (green_data[i] * quality) / 10;
@@ -312,23 +322,31 @@ int main(){ // program name, img path, quality (1-10)
     std::vector<bitpattern> blue_patterns;
     blue_list[0].get_bit_pattern(blue_patterns);
 
-    // combining bitpatterns from vectors into a single bitpattern
+    // combining bitpatterns from vectors into a single bitpattern using image data
     bitpattern red_pattern;
     bitpattern green_pattern;
     bitpattern blue_pattern;
-    for (int i = 0; i < red_patterns.size(); i++){
-        for (int u = 0; u < red_patterns[i].pattern.size(); u++){
-            red_pattern.writebit(red_patterns[i].pattern[u]);
+    for (int i = 0; i < infoHeader.biHeight * infoHeader.biWidth; i++){
+        for (int j = 0; j < red_patterns.size(); j++){
+            if (red_data[i] == red_patterns[j].colorvalue){
+                for (int k = 0; k < red_patterns[j].digit; k++){
+                    red_pattern.writebit(red_patterns[j].pattern[k]);
+                }
+            }
         }
-    }
-    for (int i = 0; i < green_patterns.size(); i++){
-        for (int u = 0; u < green_patterns[i].pattern.size(); u++){
-            green_pattern.writebit(green_patterns[i].pattern[u]);
+        for (int j = 0; j < green_patterns.size(); j++){
+            if (green_data[i] == green_patterns[j].colorvalue){
+                for (int k = 0; k < green_patterns[j].digit; k++){
+                    green_pattern.writebit(green_patterns[j].pattern[k]);
+                }
+            }
         }
-    }
-    for (int i = 0; i < blue_patterns.size(); i++){
-        for (int u = 0; u < blue_patterns[i].pattern.size(); u++){
-            blue_pattern.writebit(blue_patterns[i].pattern[u]);
+        for (int j = 0; j < blue_patterns.size(); j++){
+            if (blue_data[i] == blue_patterns[j].colorvalue){
+                for (int k = 0; k < blue_patterns[j].digit; k++){
+                    blue_pattern.writebit(blue_patterns[j].pattern[k]);
+                }
+            }
         }
     }
     
@@ -402,9 +420,9 @@ int main(){ // program name, img path, quality (1-10)
         fwrite(&blue_arr[i].il, sizeof(int), 1, compressed_file);
         fwrite(&blue_arr[i].ir, sizeof(int), 1, compressed_file);
     }
-    fwrite(red_bitarray.bitdata, 1, (red_pattern.pattern.size()/8) + 1, compressed_file);
-    fwrite(green_bitarray.bitdata, 1, (green_pattern.pattern.size()/8) + 1, compressed_file);
-    fwrite(blue_bitarray.bitdata, 1, (blue_pattern.pattern.size()/8) + 1, compressed_file);
+    fwrite(red_bitarray.bitdata, 1, (red_bitarray.bitp+7)/8, compressed_file);
+    fwrite(green_bitarray.bitdata, 1, (green_bitarray.bitp+7)/8, compressed_file);
+    fwrite(blue_bitarray.bitdata, 1, (blue_bitarray.bitp+7)/8, compressed_file);
 
     // writing original headers to reconstruct image
     fwrite(&fileHeader, sizeof(bfh), 1, compressed_file);
